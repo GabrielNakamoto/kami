@@ -36,6 +36,7 @@ run = wandb.init(
         "d_model" : d_model,
         "depth" : depth,
         "heads" : heads,
+        "n_params" : n_params,
         "c_value" : c_value,
         "batch_size" : batch_size,
         "peak_lr" : peak_lr,
@@ -51,30 +52,37 @@ def random_batch(n):
     Y_v = Tensor(np.asarray(Y_outcome[samples]), dtype=dtypes.float32)
     return xp, xg, Y_p, Y_v
 
+eval_xp, eval_xg, eval_yp, eval_yv = random_batch(1024)
+
 @TinyJit
 def step(xp, xg, yp, yv):
     optim.zero_grad()
     policy_logits, value_logits = model(xp, xg)
     policy_logits = policy_logits.masked_fill(yp < 0, -1e9)
     yp = yp.maximum(0)
-    loss = policy_logits.cross_entropy(yp) + c_value * (yv.squeeze(-1) - value_logits).square().mean()
+    policy_loss = policy_logits.cross_entropy(yp)
+    value_loss = (yv.squeeze(-1) - value_logits).square().mean()
+    loss = policy_loss + c_value * value_loss
     loss.backward()
     optim.step()
-    return loss
+    return loss, policy_loss, value_loss
 
 for t in range(steps):
-    if t < warmup_steps: optim.lr.assign(Tensor([peak_lr * (t + 1) / warmup_steps]))
-    elif t == warmup_steps: optim.lr.assign(Tensor([peak_lr]))
+    if t < warmup_steps: 
+        lr = peak_lr * (t + 1) / warmup_steps
+    else:
+        progress = (t - warmup_steps) / (steps - warmup_steps)
+        lr = peak_lr * 0.5 * (1 + np.cos(np.pi * progress))
+    optim.lr.assign(Tensor([lr]))
 
     Tensor.training = True
-    loss = step(*random_batch(batch_size))
+    loss, policy_loss, value_loss = step(*random_batch(batch_size))
     Tensor.training = False
     
-    if t % 1000 == 0:
-        xp, xg, yp, yv = random_batch(256)
-        preds = model(xp, xg)[0].masked_fill(yp < 0, -1e9).argmax(axis=-1)
-        targets = yp.maximum(0).argmax(axis=-1)
+    if t % 200 == 0:
+        preds = model(eval_xp, eval_xg)[0].masked_fill(eval_yp < 0, -1e9).argmax(axis=-1)
+        targets = eval_yp.maximum(0).argmax(axis=-1)
         acc = (preds == targets).float().mean().item()
-        print(f"step: {t}, loss={loss.item():.2f}, acc={acc*100.:.2f}%")
-        run.log({"acc":acc*100, "loss":loss.item()})
+        # print(f"step: {t}, loss={loss.item():.2f}, acc={acc*100.:.2f}%")
+        run.log({"acc":acc*100, "loss":loss.item(), "policy_loss" : policy_loss.item(), "value_loss" : value_loss.item()})
         safe_save(get_state_dict(model), "model.safetensors", metadata=run.config.as_dict())
