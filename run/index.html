@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Play vs Model</title>
+  <link rel="stylesheet" href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
+  <style>
+    body { font-family: sans-serif; max-width: 560px; margin: 2em auto; }
+    #board { width: 480px; }
+    #status { margin: 1em 0; }
+    #metadata { margin-top: 1.5em; font-size: 0.9em; color: #444; }
+    #metadata table { border-collapse: collapse; }
+    #metadata td { padding: 2px 12px 2px 0; }
+    #metadata td:first-child { color: #888; }
+  </style>
+</head>
+<body>
+  <h2>Play vs Model</h2>
+  <div id="board"></div>
+  <div id="status">Your move (white).</div>
+  <button id="reset">Reset</button>
+  <div id="metadata"></div>
+
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+  <script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
+  <script>
+    var game = new Chess();
+    var board;
+    function setStatus(m) { $("#status").text(m); }
+
+    function checkOver() {
+      if (!game.game_over()) return false;
+      setStatus(game.in_checkmate() ? "Checkmate." :
+                game.in_draw() ? "Draw." : "Game over.");
+      return true;
+    }
+
+    function modelMove() {
+      setStatus("Model thinking...");
+      $.ajax({
+        url: "/move", method: "POST", contentType: "application/json",
+        data: JSON.stringify({moves: game.history({verbose: true}).map(m => m.from + m.to + (m.promotion || ""))})
+      }).done(function(res) {
+        if (res.move) {
+          game.move({from: res.move.slice(0,2), to: res.move.slice(2,4),
+                     promotion: res.move.slice(4) || undefined});
+          board.position(game.fen());
+        }
+        if (!checkOver()) setStatus("Your move.");
+      });
+    }
+
+    function onDrop(source, target) {
+      var mv = game.move({from: source, to: target, promotion: 'q'});
+      if (mv === null) return 'snapback';
+      if (checkOver()) return;
+      window.setTimeout(modelMove, 150);
+    }
+
+    board = Chessboard("board", {
+      draggable: true, position: "start", onDrop: onDrop,
+      pieceTheme: "https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png"
+    });
+
+    $("#reset").click(function() {
+      game = new Chess(); board.start(); setStatus("Your move (white).");
+    });
+
+    $.getJSON("/metadata", function(meta) {
+      var keys = Object.keys(meta);
+      if (!keys.length) { $("#metadata").text("No model metadata."); return; }
+      var rows = keys.map(function(k) {
+        var v = meta[k];
+        if (typeof v === "number") v = v.toLocaleString();
+        return "<tr><td>" + k + "</td><td>" + v + "</td></tr>";
+      }).join("");
+      $("#metadata").html("<b>Model</b><table>" + rows + "</table>");
+    });
+  </script>
+</body>
+</html>
