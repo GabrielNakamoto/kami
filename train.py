@@ -9,15 +9,15 @@ from tinygrad.device import Device
 
 print(Device.DEFAULT)
 
-N = 100000
+N = 10000000
 X_pieces = np.lib.format.open_memmap("pieces.np", shape=(N,512))
 X_games = np.lib.format.open_memmap("globals.np", shape=(N,7))
 Y_move = np.lib.format.open_memmap("moves.np", shape=(N,4672))
 Y_outcome = np.lib.format.open_memmap("outcomes.np", shape=(N,))
 
-d_model = 128
-depth = 8
-heads = 4
+d_model = 256
+depth = 10
+heads = 8
 c_value = 0.25
 batch_size = 512
 warmup_steps = 2e3
