@@ -19,9 +19,9 @@ d_model = 256
 depth = 10
 heads = 8
 c_value = 0.1
-batch_size = 512
+batch_size = 2048
 warmup_steps = 2e3
-peak_lr = 3e-4
+peak_lr = 4e-4
 steps = 100000
 
 model = Model(d_model, depth, 7, heads)
