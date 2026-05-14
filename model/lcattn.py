@@ -12,6 +12,8 @@ class Smolgen:
         self.proj_head = nn.Linear(256, 256*n_heads)
         self.ln_heads = nn.LayerNorm(256*n_heads)
         self.scale = nn.Linear(256, 64*64)
+        self.scale.weight = Tensor.zeros(64*64, 256)
+        self.scale.bias = Tensor.zeros(64*64)
     def __call__(self, x:Tensor):
         x = self.proj_in(x).reshape(-1, 64*32)
         x = self.ln_extract(self.extract(x)).swish()
@@ -26,7 +28,7 @@ class LeelaAttention:
         self.head_dim = dim // n_heads
         self.smolgen = Smolgen(dim, n_heads)
         self.qkv_proj = nn.Linear(dim, dim*3, bias=False)
-        self.out_proj = nn.Linear(dim, dim)
+        self.out_proj = nn.Linear(dim, dim, bias=False)
     def __call__(self, x:Tensor, dropout_p:float=0.0):
         B, seqln = x.shape[0], x.shape[1]
         xqkv = self.qkv_proj(x).reshape(B, seqln, 3, self.n_heads, self.head_dim)

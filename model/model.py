@@ -26,12 +26,12 @@ class TransformerBlock:
 
         return self.attn_proj(attn)
     def __call__(self, x: Tensor) -> Tensor:
-        if self.lcattn: x = x + self.lcattn(self.attn_norm(x))
+        if self.lcattn: x = x + self.lcattn(self.attn_norm(x), dropout_p=0.05)
         else: x = x + self._attention(self.attn_norm(x), dropout_p=0.05)
         return x + self.ffn_norm(x).sequential(self.ffn).dropout(0.05)
 
 class Model:
-    def __init__(self, dim: int, layers: int, n_global, n_heads: int, use_lc_attn:bool=False):
+    def __init__(self, dim:int, layers:int, n_heads:int, use_lc_attn:bool=False):
         self.dim = dim
         self.proj_in = Linear(15, dim)
         self.pos_emb = Embedding(64, dim)
@@ -41,13 +41,14 @@ class Model:
 
         self.value_proj = [
             Linear(dim, 128),
+            Tensor.relu,
             Linear(128, 1)
         ]
 
     def __call__(self, pieces: Tensor, global_features: Tensor) -> tuple[Tensor, Tensor]:
         B = pieces.shape[0]
-        pt = pieces.reshape(B, 64, 8)
-        g = global_features.unsqueeze(1).expand((B,64,-1))
+        pt = pieces.reshape(B, 8, 64).transpose(1,2)
+        g = global_features.unsqueeze(1).expand((B,64,-1)) # each square gets global information
         x = pt.cat(g, dim=-1)
         x = self.proj_in(x)
         x = x + self.pos_emb(Tensor.arange(64))
