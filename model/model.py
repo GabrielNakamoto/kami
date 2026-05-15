@@ -1,6 +1,43 @@
 from tinygrad.tensor import Tensor
 from tinygrad.nn import Embedding, Linear, RMSNorm
-from .lcattn import LeelaAttention
+import math
+
+class Smolgen:
+    def __init__(self, dim, n_heads):
+        self.n_heads = n_heads
+        self.proj_in = Linear(dim, 32, bias=False)
+        self.extract = Linear(64*32, 256)
+        self.ln_extract = RMSNorm(256)
+        self.proj_head = Linear(256, 256*n_heads)
+        self.ln_heads = RMSNorm(256*n_heads)
+        self.scale = Linear(256, 64*64)
+        self.scale.weight = Tensor.zeros(64*64, 256)
+        self.scale.bias = Tensor.zeros(64*64)
+    def __call__(self, x:Tensor):
+        x = self.proj_in(x).reshape(-1, 64*32)
+        x = self.ln_extract(self.extract(x)).swish()
+        x = self.ln_heads(self.proj_head(x)).swish()
+        x = x.reshape(-1, self.n_heads, 256)
+        return self.scale(x).reshape(-1, self.n_heads, 64, 64)
+
+class LeelaAttention:
+    def __init__(self, dim, n_heads):
+        self.dim = dim
+        self.n_heads = n_heads
+        self.head_dim = dim // n_heads
+        self.smolgen = Smolgen(dim, n_heads)
+        self.qkv_proj = Linear(dim, dim*3, bias=False)
+        self.out_proj = Linear(dim, dim, bias=False)
+    def __call__(self, x:Tensor, dropout_p:float=0.0):
+        B, seqln = x.shape[0], x.shape[1]
+        xqkv = self.qkv_proj(x).reshape(B, seqln, 3, self.n_heads, self.head_dim)
+        get = lambda n: xqkv[:,:,n].transpose(1,2)
+        q, k, v = get(0), get(1), get(2) # (bchsz, n_heads, 64, head_dim)
+        s = self.smolgen(x) # (bchsz, n_heads, 64, 64)
+        attn = q @ k.transpose(-2, -1) / math.sqrt(self.head_dim)
+        out = (attn + s).softmax(-1).dropout(dropout_p) @ v
+        out = out.transpose(1, 2).reshape(B, seqln, self.dim)
+        return self.out_proj(out)
 
 class TransformerBlock:
     def __init__(self, dim, n_heads, use_lc_attn:bool=False):
@@ -39,12 +76,6 @@ class Model:
         self.blocks = [TransformerBlock(dim, n_heads, use_lc_attn=use_lc_attn) for _ in range(layers)]
         self.policy_head = Linear(dim, 73)
 
-        self.value_proj = [
-            Linear(dim, 128),
-            Tensor.relu,
-            Linear(128, 1)
-        ]
-
     def __call__(self, pieces: Tensor, global_features: Tensor) -> tuple[Tensor, Tensor]:
         B = pieces.shape[0]
         pt = pieces.reshape(B, 8, 64).transpose(1,2)
@@ -54,9 +85,5 @@ class Model:
         x = x + self.pos_emb(Tensor.arange(64))
         x = x.sequential(self.blocks)
         x = self.final_norm(x)
-        # include square info for value head
-        vx = x.mean(axis=1)
-        p = self.policy_head(x).reshape(-1, 4672)
-        v = vx.sequential(self.value_proj).tanh().squeeze(-1)
-        return p, v
+        return self.policy_head(x).reshape(-1, 4672)
 
