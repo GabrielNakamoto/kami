@@ -3,7 +3,7 @@
 A pedagogical implementation of a deep learning chess model.
 
 - Will explore AlphaZero style self play and MCTS but starting with simple supervised Transformer policy network.
-- Using [angeluriot/chess_games](https://huggingface.co/datasets/angeluriot/chess_games) database for training.
+- Created a [3.8m position decorrelated dataset](https://huggingface.co/datasets/gRa1ne/decorrelated-chess-3.8m/) from lichess elite positions
 
 ### Notable techniques/improvements:
 - Mark illegal moves as very negative before computing cross entropy loss [^1]
