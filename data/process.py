@@ -52,29 +52,26 @@ def move_to_idx(m:chess.Move, flip):
     p = 0 if (not m.promotion or m.promotion == chess.QUEEN) else m.promotion - 1
     return map[(fr,to,p)]
 
-def board_to_info_tensor(board, flip):
-    board = chess.Board(fen)
-    pass
-
 def tensorize_batch(batch):
-    xs, yzs, yps = [], [], []
-    for hist, moves, z in zip(batch['fen_history'], batch['uci_moves'], batch['z']):
+    xs, xis, yzs, yps = [], [], [], []
+    for hist, move, z in zip(batch['fens'], batch['move_played'], batch['z']):
         player = hist[-1].split()[-5] == 'w'
-        ts, reps = [], []
-        boards = [chess.Board(fen) for fen in hist]
-        for board in boards:
-            ts.append(board_to_tensor(board, not player))
-            reps.append(board.is_repetition(2))
-        g = np.array([
-            boards[-1].has_kingside_castling_rights(player),
-            boards[-1].has_queenside_castling_rights(player),
-            boards[-1].has_kingside_castling_rights(not player),
-            boards[-1].has_queenside_castling_rights(not player),
-        ])
-        xs.append(np.stack(ts))
+        board = chess.Board(hist[-1])
+        xis.append(np.array([
+            board.has_kingside_castling_rights(player),
+            board.has_queenside_castling_rights(player),
+            board.has_kingside_castling_rights(not player),
+            board.has_queenside_castling_rights(not player),
+            board.ep_square if board.ep_square else 0,
+            board.has_legal_en_passant(),
+            board.halfmove_clock,
+            board.is_repetition(2),
+            board.is_repetition(3)
+        ]))
+        xs.append(board_to_tensor(board, not player))
         yzs.append(np.eye(3, dtype=np.float32)[z])
-        yps.append(uci_move_to_tensor(hist[-1], moves[-1], player))
-    return xs, yzs, yps
+        yps.append(uci_move_to_tensor(hist[-1], move, player))
+    return xs, xis, yzs, yps
 
 OUT_DIR = "tensors"
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -82,15 +79,17 @@ dataset = load_dataset("gRa1ne/decorrelated-chess-3.8m", split='train')
 N = len(dataset)
 batches = dataset.batch(256)
 
-xs = np.memmap(f"{OUT_DIR}/x.bin", dtype=np.uint8, mode="w+", shape=(N, 8, 64))
+x = np.memmap(f"{OUT_DIR}/x.bin", dtype=np.uint8, mode="w+", shape=(N, 64))
+xi = np.memmap(f"{OUT_DIR}/xi.bin", dtype=np.uint8, mode="w+", shape=(N, 9))
 yz = np.memmap(f"{OUT_DIR}/yz.bin", dtype=np.float32, mode="w+", shape=(N, 3))
 yp = np.memmap(f"{OUT_DIR}/yp.bin", dtype=np.int8, mode="w+", shape=(N, 1858))
 
 start = 0
 with Pool() as pool:
-    for xs, yzs, yps in tqdm(pool.imap_unordered(tensorize_batch, batches, chunksize=1), total=N//256, unit="batch"):
+    for xs, xis, yzs, yps in tqdm(pool.imap_unordered(tensorize_batch, batches, chunksize=1), total=N//256, unit="batch"):
         end = min(start+256,N)
         x[start:end]=np.stack(xs).astype(np.uint8)
+        xi[start:end]=np.stack(xis).astype(np.uint8)
         yz[start:end]=np.stack(yzs)
         yp[start:end]=np.stack(yps).astype(np.int8)
         start += 256

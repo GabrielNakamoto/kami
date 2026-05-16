@@ -25,8 +25,8 @@ def process_batch(batch):
     return hs, zs, ms
 
 SCHEMA = pa.schema([
-    ("fen_history", pa.list_(pa.string())),
-    ("uci_moves",   pa.list_(pa.string())),
+    ("fens", pa.list_(pa.string())),
+    ("move_played",   pa.string()),
     ("z",           pa.int64()),
 ])
 
@@ -38,4 +38,4 @@ if __name__ == "__main__":
     with pq.ParquetWriter("data.parquet", SCHEMA, compression="snappy") as writer:
         with Pool() as pool:
             for hs, zs_batch, ms_batch in tqdm(pool.imap_unordered(process_batch, batches, chunksize=1), total=len(batches), unit="batch"):
-                writer.write_table(pa.table({"fen_history": hs, "uci_moves": ms_batch, "z": zs_batch}, schema=SCHEMA))
+                writer.write_table(pa.table({"fens": hs, "move_played": ms_batch, "z": zs_batch}, schema=SCHEMA))

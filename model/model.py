@@ -70,20 +70,16 @@ class TransformerBlock:
 class Model:
     def __init__(self, dim:int, layers:int, n_heads:int, use_lc_attn:bool=False):
         self.dim = dim
-        self.proj_in = Linear(15, dim)
+        self.piece_emb = Embedding(13, dim)
+        self.proj_glob = Linear(9, dim)
         self.pos_emb = Embedding(64, dim)
         self.final_norm = RMSNorm(dim)
         self.blocks = [TransformerBlock(dim, n_heads, use_lc_attn=use_lc_attn) for _ in range(layers)]
-        self.policy_head = Linear(dim, 73)
-
-    def __call__(self, pieces: Tensor, global_features: Tensor) -> tuple[Tensor, Tensor]:
-        B = pieces.shape[0]
-        pt = pieces.reshape(B, 8, 64).transpose(1,2)
-        g = global_features.unsqueeze(1).expand((B,64,-1)) # each square gets global information
-        x = pt.cat(g, dim=-1)
-        x = self.proj_in(x)
-        x = x + self.pos_emb(Tensor.arange(64))
+        self.policy_head = Linear(64*dim, 1858)
+    def __call__(self, pieces: Tensor, global_features: Tensor) -> Tensor:
+        # (64, dim) + global bias (1, dim) + pos embedding 
+        x = self.piece_emb(pieces) + self.proj_glob(global_features).unsqueeze(1) + self.pos_emb(Tensor.arange(64))
         x = x.sequential(self.blocks)
         x = self.final_norm(x)
-        return self.policy_head(x).reshape(-1, 4672)
+        return self.policy_head(x.flatten(1)).reshape(-1, 1858)
 
