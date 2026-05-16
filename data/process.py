@@ -1,4 +1,5 @@
 import chess, numpy as np, os
+from multiprocessing import Pool
 from tqdm import tqdm
 from datasets import load_dataset
 
@@ -27,8 +28,7 @@ def build_move_mapping():
     imap = { v : k for k, v in map.items() }
     return map, imap
 
-def fen_to_tensor(fen, flip): # out(64,), square classes 0=none, 1-6=white, 7-12=black
-    board = chess.Board(fen)
+def board_to_tensor(board, flip): # out(64,), square classes 0=none, 1-6=white, 7-12=black
     t = np.zeros(64)
     for square, piece in board.piece_map().items():
         color = piece.color if flip else not piece.color
@@ -52,11 +52,26 @@ def move_to_idx(m:chess.Move, flip):
     p = 0 if (not m.promotion or m.promotion == chess.QUEEN) else m.promotion - 1
     return map[(fr,to,p)]
 
+def board_to_info_tensor(board, flip):
+    board = chess.Board(fen)
+    pass
+
 def tensorize_batch(batch):
     xs, yzs, yps = [], [], []
     for hist, moves, z in zip(batch['fen_history'], batch['uci_moves'], batch['z']):
         player = hist[-1].split()[-5] == 'w'
-        xs.append(np.stack([fen_to_tensor(f, not player) for f in hist]))
+        ts, reps = [], []
+        boards = [chess.Board(fen) for fen in hist]
+        for board in boards:
+            ts.append(board_to_tensor(board, not player))
+            reps.append(board.is_repetition(2))
+        g = np.array([
+            boards[-1].has_kingside_castling_rights(player),
+            boards[-1].has_queenside_castling_rights(player),
+            boards[-1].has_kingside_castling_rights(not player),
+            boards[-1].has_queenside_castling_rights(not player),
+        ])
+        xs.append(np.stack(ts))
         yzs.append(np.eye(3, dtype=np.float32)[z])
         yps.append(uci_move_to_tensor(hist[-1], moves[-1], player))
     return xs, yzs, yps
@@ -65,14 +80,17 @@ OUT_DIR = "tensors"
 os.makedirs(OUT_DIR, exist_ok=True)
 dataset = load_dataset("gRa1ne/decorrelated-chess-3.8m", split='train')
 N = len(dataset)
+batches = dataset.batch(256)
 
-x = np.memmap(f"{OUT_DIR}/x.bin", dtype=np.uint8, mode="w+", shape=(N, 8, 64))
+xs = np.memmap(f"{OUT_DIR}/x.bin", dtype=np.uint8, mode="w+", shape=(N, 8, 64))
 yz = np.memmap(f"{OUT_DIR}/yz.bin", dtype=np.float32, mode="w+", shape=(N, 3))
 yp = np.memmap(f"{OUT_DIR}/yp.bin", dtype=np.int8, mode="w+", shape=(N, 1858))
 
-for start in tqdm(range(0, N, 512)):
-    end = min(start + 512, N)
-    xs, yzs, yps = tensorize_batch(dataset[start:end])
-    x[start:end]=np.stack(xs).astype(np.uint8)
-    yz[start:end]=np.stack(yzs)
-    yp[start:end]=np.stack(yps).astype(np.int8)
+start = 0
+with Pool() as pool:
+    for xs, yzs, yps in tqdm(pool.imap_unordered(tensorize_batch, batches, chunksize=1), total=N//256, unit="batch"):
+        end = min(start+256,N)
+        x[start:end]=np.stack(xs).astype(np.uint8)
+        yz[start:end]=np.stack(yzs)
+        yp[start:end]=np.stack(yps).astype(np.int8)
+        start += 256

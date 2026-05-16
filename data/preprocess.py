@@ -14,12 +14,12 @@ def process_batch(batch):
         # skip first 6 + need 7 ply history
         board = chess.Board()
         n = random.randint(14, len(moves)-1)
-        for i in range(n-8): board.push_uci(moves[i])
+        for i in range(n-2): board.push_uci(moves[i])
         history = []
-        for i in range(n-8, n):
+        for i in range(n-2, n):
             board.push_uci(moves[i])
             history.append(board.fen())
-        ms.append(moves[n+1])
+        ms.append(moves[n])
         hs.append(history)
         zs.append(z)
     return hs, zs, ms
@@ -31,9 +31,10 @@ SCHEMA = pa.schema([
 ])
 
 if __name__ == "__main__":
-    games = [l for l in open("processed.uci").read().splitlines() if l.strip()]
-    N = len(games) // 512
-    batches = [games[i*512:(i*512)+512] for i in range(N)]
+    games = [l for l in open("raw/raw.uci").read().splitlines() if l.strip()]
+    bchsz = 512
+    N = len(games) // bchsz
+    batches = [games[i*bchsz:(i*bchsz)+bchsz] for i in range(N)]
     with pq.ParquetWriter("data.parquet", SCHEMA, compression="snappy") as writer:
         with Pool() as pool:
             for hs, zs_batch, ms_batch in tqdm(pool.imap_unordered(process_batch, batches, chunksize=1), total=len(batches), unit="batch"):

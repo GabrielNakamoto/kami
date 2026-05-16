@@ -10,10 +10,20 @@ from tinygrad.device import Device
 print(Device.DEFAULT)
 
 N = 100000
-X_pieces = np.lib.format.open_memmap("pieces.np", shape=(N,512))
-X_games = np.lib.format.open_memmap("globals.np", shape=(N,7))
-Y_move = np.lib.format.open_memmap("moves.np", shape=(N,4672))
-Y_outcome = np.lib.format.open_memmap("outcomes.np", shape=(N,))
+x = Tensor.empty(N, 8, 64, dtype=dtypes.uint8, device="DISK:data/tensors/x.bin")
+yp = Tensor.empty(N, 1858, dtype=dtypes.int8, device="DISK:data/tensors/yp.bin")
+yz = Tensor.empty(N, 3, dtype=dtypes.float32, device="DISK:data/tensors/yz.bin")
+
+valid_N = 5000
+train_N = N - valid_N
+
+def random_batch(n):
+    samples = np.random.randint(0, train_N, size=n)
+    xp = Tensor(np.asarray(X_pieces[samples]), dtype=dtypes.float32)
+    xg = Tensor(np.asarray(X_games[samples]), dtype=dtypes.float32)
+    Y_p = Tensor(np.asarray(Y_move[samples]), dtype=dtypes.float32)
+    Y_v = Tensor(np.asarray(Y_outcome[samples]), dtype=dtypes.float32)
+    return xp, xg, Y_p, Y_v
 
 d_model = 128
 depth = 6
@@ -42,16 +52,6 @@ config={
 
 run = wandb.init(entity="raine1-me", project="chessformer", config=config) if os.getenv('WANDB', False) else None
 
-valid_N = 5000
-train_N = N - valid_N
-
-def random_batch(n):
-    samples = np.random.randint(0, train_N, size=n)
-    xp = Tensor(np.asarray(X_pieces[samples]), dtype=dtypes.float32)
-    xg = Tensor(np.asarray(X_games[samples]), dtype=dtypes.float32)
-    Y_p = Tensor(np.asarray(Y_move[samples]), dtype=dtypes.float32)
-    Y_v = Tensor(np.asarray(Y_outcome[samples]), dtype=dtypes.float32)
-    return xp, xg, Y_p, Y_v
 
 eval_xp = Tensor(np.asarray(X_pieces[-valid_N:]), dtype=dtypes.float32)
 eval_xg = Tensor(np.asarray(X_games[-valid_N:]), dtype=dtypes.float32)
