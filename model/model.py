@@ -1,6 +1,11 @@
 from tinygrad.tensor import Tensor
+from tinygrad.dtype import dtypes
+from chessformer.data import build_move_mapping
 from tinygrad.nn import Embedding, Linear, RMSNorm
 import math
+
+map, _ = build_move_mapping()
+policy_map = Tensor([fr_ * 64 + to_ for fr_, to_, _ in map], dtype=dtypes.int32)
 
 class Smolgen:
     def __init__(self, dim, n_heads):
@@ -11,8 +16,8 @@ class Smolgen:
         self.proj_head = Linear(256, 256*n_heads)
         self.ln_heads = RMSNorm(256*n_heads)
         self.scale = Linear(256, 64*64)
-        self.scale.weight = Tensor.zeros(64*64, 256)
-        self.scale.bias = Tensor.zeros(64*64)
+        self.scale.weight.assign(Tensor.zeros_like(self.scale.weight))
+        self.scale.bias.assign(Tensor.zeros_like(self.scale.bias))
     def __call__(self, x:Tensor):
         x = self.proj_in(x).reshape(-1, 64*32)
         x = self.ln_extract(self.extract(x)).swish()
@@ -47,11 +52,7 @@ class TransformerBlock:
         self.attn_proj = None if use_lc_attn else Linear(dim, dim, bias=False)
         self.n_heads = n_heads
         self.head_dim = dim // n_heads
-        self.ffn = [
-            Linear(dim, dim*2),
-            Tensor.silu,
-            Linear(dim*2, dim)
-        ]
+        self.ffn = [Linear(dim, dim*2), Tensor.silu, Linear(dim*2, dim)]
         self.attn_norm = RMSNorm(dim)
         self.ffn_norm = RMSNorm(dim)
     def _attention(self, x: Tensor, dropout_p:float=0.0) -> Tensor: # x(bchsz, 64, dim)
@@ -60,7 +61,6 @@ class TransformerBlock:
         getf = lambda n: xqkv[:,:,n].transpose(1,2)
         q, k, v = getf(0), getf(1), getf(2)
         attn = q.scaled_dot_product_attention(k, v, is_causal=False, dropout_p=dropout_p).transpose(2,1).reshape((bchsz, seqln, self.dim))
-
         return self.attn_proj(attn)
     def __call__(self, x: Tensor) -> Tensor:
         if self.lcattn: x = x + self.lcattn(self.attn_norm(x), dropout_p=0.05)
@@ -72,14 +72,15 @@ class Model:
         self.dim = dim
         self.piece_emb = Embedding(13, dim)
         self.proj_glob = Linear(9, dim)
-        self.pos_emb = Embedding(64, dim)
         self.final_norm = RMSNorm(dim)
         self.blocks = [TransformerBlock(dim, n_heads, use_lc_attn=use_lc_attn) for _ in range(layers)]
-        self.policy_head = Linear(64*dim, 1858)
+        self.policy_from_proj = Linear(dim, 64)
+        self.policy_to_proj = Linear(dim, 64)
     def __call__(self, pieces: Tensor, global_features: Tensor) -> Tensor:
-        # (64, dim) + global bias (1, dim) + pos embedding 
-        x = self.piece_emb(pieces) + self.proj_glob(global_features).unsqueeze(1) + self.pos_emb(Tensor.arange(64))
+        x = self.piece_emb(pieces) + self.proj_glob(global_features).unsqueeze(1)
         x = x.sequential(self.blocks)
         x = self.final_norm(x)
-        return self.policy_head(x.flatten(1)).reshape(-1, 1858)
-
+        q = self.policy_from_proj(x)
+        k = self.policy_to_proj(x)
+        logits_4096 = (q @ k.transpose(-2, -1)).reshape(-1, 64*64)
+        return logits_4096[:, policy_map]
