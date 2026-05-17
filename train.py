@@ -1,7 +1,7 @@
 from tinygrad.tensor import Tensor
 from tinygrad.engine.jit import TinyJit
-import numpy as np, wandb, os
-from model import Model
+import wandb, os
+from model import Model, build_mixed_precision
 from tinygrad.nn.optim import AdamW, Muon
 from tinygrad.nn.state import get_parameters, safe_save, get_state_dict
 from tinygrad.dtype import dtypes
@@ -38,6 +38,7 @@ def random_batch():
 model = Model(config['hidden'], config['depth'], config['heads'], use_lc_attn=True)
 config['n_params'] = sum(map(Tensor.numel, get_state_dict(model).values()))
 params = get_parameters(model)
+build_mixed_precision(params)
 matrix_params = [p for p in params if p.ndim == 2]
 highdim_params = [p for p in params if p.ndim != 2]
 
@@ -74,7 +75,7 @@ for t in range(config['training_steps']):
         Tensor.training = False
         acc = eval_model()
         if logger: logger.log({"acc":acc*100, "loss":loss.item()})
-        else: print(f"step: {t}, loss={loss.item():.2f}, acc={acc*100.:.2f}%")
+        print(f"step: {t}, loss={loss.item():.2f}, acc={acc*100.:.2f}%")
     if t % 1000 == 0:
         Tensor.training = False
         safe_save(get_state_dict(model), "model.safetensors", metadata=config)
