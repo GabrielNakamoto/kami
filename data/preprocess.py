@@ -14,16 +14,19 @@ def process_batch(batch):
         z = 0 if result == "1-0" else 2 if result == "0-1" else 1
         board = chess.Board()
         ts = sorted(random.sample(range(6, len(moves)-1), SAMPLES_PER_GAME))
-        history = []
+        history, povs = [], []
         for i in range(ts[-1]+1):
             board.push_uci(moves[i])
-            if i in ts: history.append(board.fen())
+            if i in ts:
+                history.append(board.fen())
+                if board.turn or z == 1: povs.append(z)
+                else: povs.append(2 if not z else 0)
         ms.extend([moves[t+1] for t in ts])
         hs.extend(history)
-        zs.extend([z for _ in range(SAMPLES_PER_GAME)])
+        zs.extend(povs)
     return hs, zs, ms
 
-SCHEMA = pa.schema([("fens", pa.string()), ("move_played", pa.string()), ("z", pa.int64()),])
+SCHEMA = pa.schema([("fens", pa.string()), ("move_played", pa.string()), ("wdl", pa.int64()),])
 
 if __name__ == "__main__":
     games = [l for l in open("raw/raw.uci").read().splitlines() if l.strip()]
@@ -33,4 +36,5 @@ if __name__ == "__main__":
     with pq.ParquetWriter("data.parquet", SCHEMA, compression="snappy") as writer:
         with Pool() as pool:
             for hs, zs_batch, ms_batch in tqdm(pool.imap_unordered(process_batch, batches, chunksize=1), total=len(batches), unit="batch"):
-                writer.write_table(pa.table({"fens": hs, "move_played": ms_batch, "z": zs_batch}, schema=SCHEMA))
+                writer.write_table(pa.table({"fens": hs, "move_played": ms_batch, "wdl": zs_batch}, schema=SCHEMA))
+
