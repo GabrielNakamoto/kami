@@ -54,9 +54,9 @@ def move_to_idx(m:chess.Move, flip):
 
 def tensorize_batch(batch):
     xs, xis, yzs, yps = [], [], [], []
-    for hist, move, z in zip(batch['fens'], batch['move_played'], batch['z']):
-        player = hist[-1].split()[-5] == 'w'
-        board = chess.Board(hist[-1])
+    for fen, move, z in zip(batch['fens'], batch['move_played'], batch['wdl']):
+        player = fen.split()[-5] == 'w'
+        board = chess.Board(fen)
         xis.append(np.array([
             board.has_kingside_castling_rights(player),
             board.has_queenside_castling_rights(player),
@@ -70,19 +70,19 @@ def tensorize_batch(batch):
         ]))
         xs.append(board_to_tensor(board, not player))
         yzs.append(np.eye(3, dtype=np.float32)[z])
-        yps.append(uci_move_to_tensor(hist[-1], move, player))
+        yps.append(uci_move_to_tensor(fen, move, player))
     return xs, xis, yzs, yps
 
 if __name__ == "__main__":
     OUT_DIR = "tensors"
     os.makedirs(OUT_DIR, exist_ok=True)
-    dataset = load_dataset("gRa1ne/decorrelated-chess-3.8m", split='train')
+    dataset = load_dataset("gRa1ne/decorrelated-chess", split='train')
     N = len(dataset)
     batches = dataset.batch(256)
 
     x = np.memmap(f"{OUT_DIR}/x.bin", dtype=np.uint8, mode="w+", shape=(N, 64))
     xi = np.memmap(f"{OUT_DIR}/xi.bin", dtype=np.uint8, mode="w+", shape=(N, 9))
-    yz = np.memmap(f"{OUT_DIR}/yz.bin", dtype=np.float32, mode="w+", shape=(N, 3))
+    yz = np.memmap(f"{OUT_DIR}/yz.bin", dtype=np.uint8, mode="w+", shape=(N, 3))
     yp = np.memmap(f"{OUT_DIR}/yp.bin", dtype=np.int8, mode="w+", shape=(N, 1858))
 
     start = 0
