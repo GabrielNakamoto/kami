@@ -4,31 +4,26 @@ import chess, random
 from tqdm import tqdm
 
 # multiprocess-parallelism, batch games so each IPC overhead computes many games at once
+SAMPLES_PER_GAME = 3
 def process_batch(batch):
     hs, zs, ms = [], [], []
     for game in batch:
         game = game.split()
         moves, result = [m.lower() for m in game[:-1]], game[-1]
         if len(moves) < 15: continue
-        z = 0 if result == "0-1" else 2 if result == "1-0" else 1
-        # skip first 6 + need 7 ply history
+        z = 0 if result == "1-0" else 2 if result == "0-1" else 1
         board = chess.Board()
-        n = random.randint(14, len(moves)-1)
-        for i in range(n-2): board.push_uci(moves[i])
+        ts = sorted(random.sample(range(6, len(moves)-1), SAMPLES_PER_GAME))
         history = []
-        for i in range(n-2, n):
+        for i in range(ts[-1]+1):
             board.push_uci(moves[i])
-            history.append(board.fen())
-        ms.append(moves[n])
-        hs.append(history)
-        zs.append(z)
+            if i in ts: history.append(board.fen())
+        ms.extend([moves[t+1] for t in ts])
+        hs.extend(history)
+        zs.extend([z for _ in range(SAMPLES_PER_GAME)])
     return hs, zs, ms
 
-SCHEMA = pa.schema([
-    ("fens", pa.list_(pa.string())),
-    ("move_played",   pa.string()),
-    ("z",           pa.int64()),
-])
+SCHEMA = pa.schema([("fens", pa.string()), ("move_played", pa.string()), ("z", pa.int64()),])
 
 if __name__ == "__main__":
     games = [l for l in open("raw/raw.uci").read().splitlines() if l.strip()]
