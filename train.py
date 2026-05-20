@@ -45,9 +45,12 @@ logger = wandb.init(entity="raine1-me", project="chessformer", config=config) if
 
 def eval_model():
     exp, exi, eyp = x[-valid_N:].to(Device.DEFAULT), xi[-valid_N:].to(Device.DEFAULT).float(), yp[-valid_N:].to(Device.DEFAULT).float()
-    preds = model(exp, exi).masked_fill(eyp < 0, -1e9).argmax(axis=-1)
-    targets = eyp.maximum(0).argmax(axis=-1)
-    return (preds == targets).float().mean().item()
+    logits = model(exp, exi).masked_fill(eyp < 0, -1e9)
+    preds = logits.argmax(axis=-1)
+    eyp = eyp.maximum(0)
+    loss = logits.cross_entropy(eyp)
+    targets = eyp.argmax(axis=-1)
+    return (preds == targets).float().mean().item(), loss
 
 @TinyJit
 def step(xp, xg, yp):
@@ -67,9 +70,9 @@ for t in range(config['training_steps']):
     
     if t % 10 == 0:
         Tensor.training = False
-        acc = eval_model()
-        print(f"step: {t:5d}, loss={loss.item():.2f}, acc={acc*100.:.2f}%")
-        if logger: logger.log({"acc":acc*100, "loss":loss.item()})
+        acc, valid_loss = eval_model()
+        print(f"step: {t:5d}, loss={loss.item():.2f}, valid acc={acc*100.:.2f}%, valid loss={valid_loss.item():.2f}")
+        if logger: logger.log({"acc":acc*100, "train_loss":loss.item(), "valid_loss":valid_loss.item()})
     if t % 1000 == 0:
         Tensor.training = False
         safe_save(get_state_dict(model), "model.safetensors", metadata=config)
