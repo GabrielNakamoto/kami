@@ -1,4 +1,4 @@
-# chessformer
+# kami
 
 > A deep learning chess model prioritizing elo/parameter ratio and convergence speed for consumer GPUs.
 
