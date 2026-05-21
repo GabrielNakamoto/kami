@@ -1,18 +1,17 @@
 from tinygrad.tensor import Tensor
 from tinygrad.engine.jit import TinyJit
-import wandb, os
+import wandb, os, numpy as np
 from model import Model
 from tinygrad.nn.optim import AdamW, Muon
 from tinygrad.nn.state import get_parameters, safe_save, get_state_dict
-from tinygrad.dtype import dtypes
 from tinygrad.device import Device
 from datasets import load_dataset_builder
 
 N = int(load_dataset_builder("gRa1ne/decorrelated-chess").info.splits['train'].num_examples)
-x = Tensor.empty(N, 64, dtype=dtypes.uint8, device="DISK:tensors/x.bin")
-xi = Tensor.empty(N, 9, dtype=dtypes.uint8, device="DISK:tensors/xi.bin")
-yp = Tensor.empty(N, 1858, dtype=dtypes.int8, device="DISK:tensors/yp.bin")
-yz = Tensor.empty(N, 3, dtype=dtypes.uint8, device="DISK:tensors/yz.bin")
+x  = np.memmap("tensors/x.bin",  dtype=np.uint8,  mode='r', shape=(N, 64))
+xi = np.memmap("tensors/xi.bin", dtype=np.uint8,  mode='r', shape=(N, 9))
+yp = np.memmap("tensors/yp.bin", dtype=np.int8,   mode='r', shape=(N, 1858))
+yz = np.memmap("tensors/yz.bin", dtype=np.uint8,  mode='r', shape=(N, 3))
 
 valid_N = 5000
 train_N = N - valid_N
@@ -27,21 +26,19 @@ config={
     "c_value" : 0.25
 }
 
-def get_from_device(t, samples) -> Tensor:
-    # switch to numpy memmap?
-    return Tensor.stack(*[t[i].to(Device.DEFAULT) for i in sorted(samples)])
+def mm_to_tensor(arr, idx) -> Tensor: return Tensor(np.array(arr[idx]))
 
-vx = x[-valid_N:].contiguous().to(Device.DEFAULT)
-vxi = xi[-valid_N:].to(Device.DEFAULT).float()
-vyp = yp[-valid_N:].to(Device.DEFAULT).float()
-vyz = yz[-valid_N:].to(Device.DEFAULT).float()
+vx  = Tensor(np.array(x[-valid_N:]))
+vxi = Tensor(np.array(xi[-valid_N:])).float()
+vyp = Tensor(np.array(yp[-valid_N:])).float()
+vyz = Tensor(np.array(yz[-valid_N:])).float()
 
 def random_batch():
-    samples = Tensor.randint(config['batch_size'], high=train_N, dtype=dtypes.uint32).tolist()
-    return get_from_device(x, samples), \
-        get_from_device(xi, samples).float(), \
-        get_from_device(yp, samples).float(), \
-        get_from_device(yz, samples).float()
+    samples = np.random.randint(0, train_N, config['batch_size'])
+    return mm_to_tensor(x, samples), \
+        mm_to_tensor(xi, samples).float(), \
+        mm_to_tensor(yp, samples).float(), \
+        mm_to_tensor(yz, samples).float()
 
 model = Model(config['hidden'], config['depth'], config['heads'], use_lc_attn=True)
 params = get_parameters(model)
