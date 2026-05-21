@@ -60,7 +60,7 @@ class TransformerBlock:
         self.attn_proj = None if use_lc_attn else BF16Linear(dim, dim, bias=False)
         self.n_heads = n_heads
         self.head_dim = dim // n_heads
-        self.ffn = [BF16Linear(dim, dim*2), Tensor.silu, BF16Linear(dim*2, dim)]
+        self.ffn = [BF16Linear(dim, dim*2), Tensor.swish, BF16Linear(dim*2, dim)]
         self.attn_norm = RMSNorm(dim)
         self.ffn_norm = RMSNorm(dim)
     def _attention(self, x: Tensor, dropout_p:float=0.0) -> Tensor: # x(bchsz, 64, dim)
@@ -77,7 +77,7 @@ class TransformerBlock:
         return x + self.ffn_norm(x).cast(dtypes.bfloat16).sequential(self.ffn).dropout(0.05)
 
 class Model:
-    def __init__(self, dim:int, layers:int, n_heads:int, use_lc_attn:bool=False):
+    def __init__(self, dim:int, layers:int, n_heads:int, use_lc_attn:bool=False, dropout_p:float=0.05):
         self.dim = dim
         self.piece_emb = Embedding(13, dim)
         self.proj_glob = BF16Linear(9, dim)
@@ -86,13 +86,22 @@ class Model:
         self.policy_from_proj = BF16Linear(dim, 64)
         self.policy_to_proj = BF16Linear(dim, 64)
         self.underpromo_proj = BF16Linear(dim, 9) # (3 dirs x 3 pieces)
-    def __call__(self, pieces: Tensor, global_features: Tensor) -> Tensor:
+        self.value_in = BF16Linear(dim, 32)
+        self.value_proj = BF16Linear(64*32, 128)
+        self.value_out = BF16Linear(128, 3) # WDL
+    def __call__(self, pieces: Tensor, global_features: Tensor):
         x = self.piece_emb(pieces) + self.proj_glob(global_features).unsqueeze(1)
         x = x.sequential(self.blocks)
         x = self.final_norm(x.float()).cast(dtypes.bfloat16)
+        # policy head
         q = self.policy_from_proj(x)
         k = self.policy_to_proj(x)
         p = self.underpromo_proj(x[:, 48:56]).reshape(-1, 72)
         p = p[:, underpromo_legal_mask]
         logits_4096 = (q @ k.transpose(-2, -1)).reshape(-1, 64*64)
-        return logits_4096[:, policy_map].cat(p, dim=-1).float()
+        # return logits_4096[:, policy_map].cat(p, dim=-1).float()
+        # value head
+        wdl = self.value_in(x).swish().flatten(-2).dropout(0.05)
+        wdl = self.value_proj(wdl).swish().dropout(0.05)
+        wdl = self.value_out(wdl)
+        return logits_4096[:, policy_map].cat(p, dim=-1).float(), wdl.float()
