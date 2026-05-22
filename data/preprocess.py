@@ -3,7 +3,6 @@ import pyarrow as pa, pyarrow.parquet as pq
 import chess, random
 from tqdm import tqdm
 
-# multiprocess-parallelism, batch games so each IPC overhead computes many games at once
 SAMPLES_PER_GAME = 3
 def process_batch(batch):
     hs, zs, ms = [], [], []
@@ -13,7 +12,7 @@ def process_batch(batch):
         if len(moves) < 15: continue
         z = 0 if result == "1-0" else 2 if result == "0-1" else 1
         board = chess.Board()
-        ts = sorted(random.sample(range(6, len(moves)-1), SAMPLES_PER_GAME))
+        ts = random.sample(range(6, len(moves)-1), SAMPLES_PER_GAME)
         history, povs = [], []
         for i in range(ts[-1]+1):
             board.push_uci(moves[i])

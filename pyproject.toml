@@ -1,0 +1,8 @@
+[project]
+name = "kami"
+version = "0.1.0"
+# requires_python = ">=3.10"
+dependencies = ["chess", "numpy", "tinygrad", "wandb", "huggingface_hub", "datasets"]
+
+[tool.setuptools]
+packages = ["data", "model", "run", "util"]
