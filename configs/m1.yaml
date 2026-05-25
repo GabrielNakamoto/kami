@@ -1,0 +1,14 @@
+name: 'kami-v0.1'
+
+dataset:
+  validation_examples: 2500
+
+training:
+  hidden_dimension: 256
+  transformer_blocks: 6
+  attention_heads: 8
+  batch_size: 1024
+  training_steps: 10000
+  value_loss_weight: 0.25
+  checkpoint_steps: 1000
+  logging_steps: 50
