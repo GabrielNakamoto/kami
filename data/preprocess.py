@@ -1,13 +1,24 @@
 from multiprocessing import Pool
-from functools import partial
 import pyarrow as pa, pyarrow.parquet as pq
-import chess, random, argparse
+import chess, random
 from stockfish import Stockfish
 from tqdm import tqdm
 
-def init_worker(fp):
+sf_config = {
+    "depth":8,
+    "threads":1,
+    "hash":128
+}
+
+def init_worker():
     global stockfish
-    stockfish = Stockfish(fp)
+    stockfish = Stockfish(
+        depth=sf_config["depth"],
+        parameters={
+            "Threads" : sf_config['threads'],
+            "Hash" : sf_config['hash'],
+        }
+    )
 
 SAMPLES_PER_GAME = 3
 def process_batch(batch):
@@ -28,17 +39,18 @@ def process_batch(batch):
                 ms.append(moves[i+1])
     return hs, zs, ms
 
-SCHEMA = pa.schema([("fens", pa.string()), ("move_played", pa.string()), ("stockfish_wdl", pa.list_(pa.float32(), 3))])
+SCHEMA = pa.schema(
+    [("fen_position", pa.string()),
+     ("uci_move_played", pa.string()),
+     ("stockfish_wdl", pa.list_(pa.float32(), 3))]
+).with_metadata({"stockfish_wdl:" : f"Stockfish value injection trained with settings:\n{",".join([f"{k}={v}" for k, v in sf_config.items()])}"})
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--sfpath", type=str, help="path to local stockfish executable for wdl injection")
-    cfg = parser.parse_args()
     games = [l for l in open("raw/raw.uci").read().splitlines() if l.strip()]
     bchsz = 512
     N = len(games) // bchsz
     batches = [games[i*bchsz:(i*bchsz)+bchsz] for i in range(N)]
     with pq.ParquetWriter("data.parquet", SCHEMA, compression="snappy") as writer:
-        with Pool(initializer=partial(init_worker, cfg.sfpath)) as pool:
+        with Pool(initializer=init_worker) as pool:
             for hs, zs_batch, ms_batch in tqdm(pool.imap_unordered(process_batch, batches, chunksize=1), total=len(batches), unit="batch"):
-                writer.write_table(pa.table({"fens": hs, "move_played": ms_batch, "stockfish_wdl": zs_batch}, schema=SCHEMA))
+                writer.write_table(pa.table({"fen_position": hs, "uci_move_played": ms_batch, "stockfish_wdl": zs_batch}, schema=SCHEMA))
