@@ -33,7 +33,9 @@ def process_batch(batch):
             board.push_uci(moves[i])
             if i in ts:
                 stockfish.set_fen_position(board.fen())
-                wdl = [x/1000. for x in stockfish.get_wdl_stats()]
+                stats = stockfish.get_wdl_stats()
+                if stats is None: continue
+                wdl = [x/1000. for x in stats]
                 zs.append(wdl)
                 hs.append(board.fen())
                 ms.append(moves[i+1])

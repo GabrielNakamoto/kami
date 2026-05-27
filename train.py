@@ -10,13 +10,12 @@ from datasets import load_dataset_builder
 
 def main(args):
     config = yaml.safe_load(args.cfg)
-    # N = config['dataset']['training_examples']
 
     N = int(load_dataset_builder("gRa1ne/decorrelated-chess").info.splits['train'].num_examples)
     x  = np.memmap("tensors/x.bin",  dtype=np.uint8,  mode='r', shape=(N, 64))
     xi = np.memmap("tensors/xi.bin", dtype=np.uint8,  mode='r', shape=(N, 9))
     yp = np.memmap("tensors/yp.bin", dtype=np.int8,   mode='r', shape=(N, 1858))
-    yz = np.memmap("tensors/yz.bin", dtype=np.uint8,  mode='r', shape=(N, 3))
+    yz = np.memmap("tensors/yz.bin", dtype=np.float16,  mode='r', shape=(N, 3))
 
     def random_batch():
         def mm_to_tensor(arr, idx) -> Tensor: return Tensor(np.array(arr[idx]))
@@ -33,14 +32,15 @@ def main(args):
 
     print("Device:", Device.DEFAULT)
     print(f"Model size: {config['model_params']/1e6:.2f}m params")
+    print(f"Training examples: {(N-config['dataset']['validation_examples'])/1e6:.2f}m")
 
     matrix_params = [p for p in params if p.ndim == 2]
     highdim_params = [p for p in params if p.ndim != 2]
 
-    opt1 = Muon(matrix_params)
-    opt2 = AdamW(highdim_params)
+    opt1 = Muon(matrix_params, lr=config['training']['learning_rate'], weight_decay=config['training']['weight_decay'])
+    opt2 = AdamW(highdim_params, lr=config['training']['learning_rate'], weight_decay=config['training']['weight_decay'])
 
-    logger = wandb.init(entity="raine1-me", project="chessformer", config=config) if os.getenv('WANDB', False) else None
+    logger = wandb.init(entity="raine1-me", project="chessformer", config=config) if args.wandb else None
 
     vx  = Tensor(np.array(x[-config['dataset']['validation_examples']:]))
     vxi = Tensor(np.array(xi[-config['dataset']['validation_examples']:])).float()
@@ -87,4 +87,5 @@ if __name__ == "__main__":
     argparser = argparse.ArgumentParser(description="Kami model supervised training pipeline")
     argparser.add_argument('--cfg', type=argparse.FileType('r'), help='yaml config with training params')
     argparser.add_argument('--output', type=str, help='output filename to save/checkpoint model tensors', default="model")
+    argparser.add_argument('--wandb', type=bool, help='enable wandb logging', default=False)
     main(argparser.parse_args())

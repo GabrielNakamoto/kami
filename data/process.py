@@ -4,30 +4,29 @@ from tqdm import tqdm
 from datasets import load_dataset
 from tinygrad.tensor import Tensor
 from tinygrad.dtype import dtypes
-from util.convert import board_to_tensor, uci_move_to_tensor, get_global_features
+from util.convert import board_to_tensor, uci_move_to_tensor, get_global_features, build_move_mapping
 
 def tensorize_batch(batch):
     xs, xis, yzs, yps = [], [], [], []
-    for fen, move, z in zip(batch['fens'], batch['move_played'], batch['wdl']):
+    for fen, move, wdl in zip(batch['fen_position'], batch['uci_move_played'], batch['stockfish_wdl']):
         player = fen.split()[-5] == 'w'
         board = chess.Board(fen)
         xis.append(get_global_features(board, player))
         xs.append(board_to_tensor(board, not player))
-        yzs.append(np.eye(3, dtype=np.float32)[z])
+        yzs.append(np.array(wdl, dtype=np.float16))
         yps.append(uci_move_to_tensor(fen, move, player))
     return xs, xis, yzs, yps
 
 if __name__ == "__main__":
-    OUT_DIR = "tensors"
-    os.makedirs(OUT_DIR, exist_ok=True)
+    os.makedirs("tensors", exist_ok=True)
     dataset = load_dataset("gRa1ne/decorrelated-chess", split='train')
     N = len(dataset)
     batches = dataset.batch(256)
 
-    x = np.memmap(f"{OUT_DIR}/x.bin", dtype=np.uint8, mode="w+", shape=(N, 64))
-    xi = np.memmap(f"{OUT_DIR}/xi.bin", dtype=np.uint8, mode="w+", shape=(N, 9))
-    yz = np.memmap(f"{OUT_DIR}/yz.bin", dtype=np.uint8, mode="w+", shape=(N, 3))
-    yp = np.memmap(f"{OUT_DIR}/yp.bin", dtype=np.int8, mode="w+", shape=(N, 1858))
+    x = np.memmap("tensors/x.bin", dtype=np.uint8, mode="w+", shape=(N, 64))
+    xi = np.memmap("tensors/xi.bin", dtype=np.uint8, mode="w+", shape=(N, 9))
+    yz = np.memmap("tensors/yz.bin", dtype=np.float16, mode="w+", shape=(N, 3))
+    yp = np.memmap("tensors/yp.bin", dtype=np.int8, mode="w+", shape=(N, 1858))
 
     start = 0
     with Pool() as pool:
