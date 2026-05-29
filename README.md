@@ -2,6 +2,11 @@
 
 > A deep learning chess model prioritizing elo/parameter ratio and convergence speed for consumer GPUs.
 
+> 'kami' as in kamikaze, for the reckless yet powerful playstyle of the model. Raw policy net with no search at a medium scale saw a disregard for protecting pieces in some situations, yet very agressive and sometimes beautiful offensive plays.
+
+> [!NOTE]
+> On METAL train with `AGX_RELAX_CDM_CTXSTORE_TIME_OUT=1` to disable apple watchdog from killing long forward passes
+
 ## Data
 Ended up deriving a custom dataset from the [lichess elite](https://database.nikonoel.fr/) database. I enrich and reduce the original dataset by picking n sample positions (n=3 currently) at random from each game, excluding the first 6 and last position to reduce opening memorization. This results in decorrelated positions, intended to allow for faster model generalization and reduce reliance on temporal patterns without true 'understanding'. The position is stored in FEN format with the next move label in UCI. For value head training, we obtain a stockfish WDL (win/draw/loss) estimate for the position and normalize to \[0,1\]. Stockfish is used to distill a richer training signal then just scalar game outcomes. 
 
@@ -26,6 +31,7 @@ Notable design choices and domain improvements:
 - Leela 'chessformer'/smolgen architecture, implemented as an opptional attention flag. Improves attention with relative position encoding, heuristically describing the semantic relation between positions through chess moves rather than euclidian distance.[^1][^2]
 - Muon optimizer on 2d matrices to speed up convergence[^3]
 - Mixed precision linear layers and activation functions for massive tensor core gains[^4]
+
 
 [^1]: https://lczero.org/blog/2024/02/transformer-progress/
 [^2]: https://arxiv.org/abs/2409.12272
