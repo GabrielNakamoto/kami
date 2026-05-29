@@ -3,11 +3,13 @@
 > A deep learning chess model prioritizing elo/parameter ratio and convergence speed for consumer GPUs.
 
 ## Data
-Ended up deriving a custom dataset from the [lichess elite](https://database.nikonoel.fr/) database. I enrich and reduce the original dataset by picking one position at random from each game, excluding the first 6 and last position to reduce opening memorization. This results in decorrelated positions, intended to allow for faster model generalization and reduce reliance on temporal patterns without true 'understanding'. The dataset also includes a game outcome classification (0=black win, 1=draw, 2=white win) and a label for the move chosen to be played by the current player of the position.
+Ended up deriving a custom dataset from the [lichess elite](https://database.nikonoel.fr/) database. I enrich and reduce the original dataset by picking n sample positions (n=3 currently) at random from each game, excluding the first 6 and last position to reduce opening memorization. This results in decorrelated positions, intended to allow for faster model generalization and reduce reliance on temporal patterns without true 'understanding'. The position is stored in FEN format with the next move label in UCI. For value head training, we obtain a stockfish WDL (win/draw/loss) estimate for the position and normalize to \[0,1\]. Stockfish is used to distill a richer training signal then just scalar game outcomes. 
 
-I encoded the dataset in parquet file format for efficient storage and retrieval and uploaded it to hugging face for public usage [here](https://huggingface.co/datasets/gRa1ne/decorrelated-chess-3.8m).
+I encoded the dataset in parquet file format for efficient storage and retrieval and uploaded it to hugging face for public usage [here](https://huggingface.co/datasets/gRa1ne/decorrelated-chess).
 
-I chose to remove 8 ply history as it is more necessary for convolution/RESnet policy implementations. This dataset is intended for small/medium size transformer policy and value networks.
+The dataset processing scripts are in the `data/` directory, however there are some shell commands necessary to download and build a raw PGN file to reproduce the dataset (I plan to write a bash script in the future). 
+
+Before training the model you need to run `data/process.py` to expand the dataset into tensors with the proper formatting. This is multiprocessed using numpy memmaps to be as efficient as possible.
 
 ## Input Representation
 Game state/input is encoded as 2 tensors:
