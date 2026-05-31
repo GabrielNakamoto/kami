@@ -53,20 +53,36 @@
       return true;
     }
 
-    function modelMove() {
+    async function modelMove() {
       setStatus("Model thinking...");
-      $.ajax({
-        url: "/move", method: "POST", contentType: "application/json",
-        data: JSON.stringify({moves: game.history({verbose: true}).map(m => m.from + m.to + (m.promotion || ""))})
-      }).done(function(res) {
-        renderDist(res.dist || []);
-        if (res.move) {
-          game.move({from: res.move.slice(0,2), to: res.move.slice(2,4),
-                     promotion: res.move.slice(4) || undefined});
-          board.position(game.fen());
-        }
-        if (!checkOver()) setStatus("Your move.");
+      var res = await fetch("/move", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({fen: game.fen()})
       });
+      var reader = res.body.getReader();
+      var decoder = new TextDecoder();
+      var buf = "", finalMove = null;
+      while (true) {
+        var chunk = await reader.read();
+        if (chunk.done) break;
+        buf += decoder.decode(chunk.value, {stream: true});
+        var idx;
+        while ((idx = buf.indexOf("\n")) >= 0) {
+          var line = buf.slice(0, idx).trim();
+          buf = buf.slice(idx + 1);
+          if (!line) continue;
+          var msg = JSON.parse(line);
+          renderDist(msg.dist || [], msg.batch, msg.num_batches);
+          if (msg.done) finalMove = msg.move;
+          else setStatus("Model thinking... batch " + (msg.batch + 1) + "/" + msg.num_batches);
+        }
+      }
+      if (finalMove) {
+        game.move({from: finalMove.slice(0,2), to: finalMove.slice(2,4),
+                   promotion: finalMove.slice(4) || undefined});
+        board.position(game.fen());
+      }
+      if (!checkOver()) setStatus("Your move.");
     }
 
     function onDrop(source, target) {
@@ -81,19 +97,23 @@
       pieceTheme: "https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png"
     });
 
-    function renderDist(dist) {
+    function renderDist(dist, batch, numBatches) {
       if (!dist.length) { $("#dist").empty(); return; }
       var max = dist[0].prob;
+      var total = dist.reduce(function(s, d) { return s + d.visits; }, 0);
       var rows = dist.map(function(d, i) {
         var pct = (d.prob * 100).toFixed(1) + "%";
-        var w = (d.prob / max * 100).toFixed(1) + "%";
+        var w = (max > 0 ? d.prob / max * 100 : 0).toFixed(1) + "%";
         return "<tr class='" + (i === 0 ? "top" : "") + "'>" +
                "<td class='mv'>" + d.move + "</td>" +
                "<td class='pct'>" + pct + "</td>" +
                "<td class='bar'><div class='barwrap'><div class='barfill' style='width:" + w + "'></div></div></td>" +
-               "<td class='lg'>" + d.logit.toFixed(2) + "</td></tr>";
+               "<td class='lg'>" + d.visits + "</td></tr>";
       }).join("");
-      $("#dist").html("<b>Legal move logits</b><table>" + rows + "</table>");
+      var head = "<b>Search visits (" + total + ")</b>";
+      if (batch != null && numBatches != null)
+        head += " <span style='color:#888'>batch " + (batch + 1) + "/" + numBatches + "</span>";
+      $("#dist").html(head + "<table>" + rows + "</table>");
     }
 
     $("#reset").click(function() {

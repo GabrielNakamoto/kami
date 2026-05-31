@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from tinygrad.tensor import Tensor
 from tinygrad.dtype import dtypes
 import numpy as np, math, copy
@@ -16,21 +16,19 @@ import chess
 
 @dataclass
 class Tree:
-    Nsa: dict = {}
-    Qsa: dict = {}
-    Ls: dict = {}
-    Es: dict = {}
-    Sum: dict = {}
+    Nsa: dict = field(default_factory=dict)
+    Ls: dict = field(default_factory=dict)
+    Sum: dict = field(default_factory=dict)
+    Es: dict = field(default_factory=dict)
+    fpu: float = 0.0
 
-    def update(self, fen:str, a, v, getBatch, vl:float=0.0):
-        board = chess.Board(fen)
-        s = board._transposition_key()
+    def update(self, s, a, v, getBatch, vl:int=1):
         if not getBatch and (v is not None):
             self.Nsa[s][a] += 1
             self.Sum[s][a] += v
         else:
             if v is None:
-                mew = self.Sum[s][a] / self.Nsa[s][a]
+                mew = self.Sum[s][a] / self.Nsa[s][a] if self.Nsa[s][a] > 0 else self.fpu
                 self.Nsa[s][a] += vl
                 self.Sum[s][a] += vl * mew
             else:
@@ -39,15 +37,17 @@ class Tree:
 
 # https://ludii.games/citations/ARXIV2021-1.pdf
 class BatchMCTS:
-    def __init__(self, model:Model, c_puct:float=1.0, FPU:float=0.0):
+    def __init__(self, model:Model, c_puct:float=1.2, FPU:float=0.25):
         self.model = model
         self.c_puct, self.fpu = c_puct, FPU
-        self.batch_tree, self.tree = Tree(), Tree()
-        self.batch: list[tuple[Tensor, Tensor]] = []
+        self.batch_tree, self.tree = Tree(fpu=FPU), Tree(fpu=FPU)
+        self.batch_boards: list[np.ndarray] = []
+        self.batch_globals: list[np.ndarray] = []
+        self.batch_fens: list[str] = []
         self.trans_table = {}
-    def _puct(self, fen:str, getBatch:bool):
-        board = chess.Board(fen)
+    def _puct(self, board:chess.Board, getBatch:bool):
         s = board._transposition_key()
+        fen = board.fen()
         tree = self.batch_tree if getBatch else self.tree
 
         if s in tree.Es:
@@ -65,52 +65,58 @@ class BatchMCTS:
             flip = not board.turn
             if s not in self.trans_table:
                 if getBatch:
-                    self.batch.append((
-                        Tensor(board_to_tensor(board, flip), dtype=dtypes.uint16),
-                        Tensor(get_global_features(board, board.turn), dtype=dtypes.float32).unsqueeze(0)
-                    ))
+                    self.batch_fens.append(fen)
+                    self.batch_boards.append(board_to_tensor(board, flip))
+                    self.batch_globals.append(get_global_features(board, board.turn))
                 return None
             else:
-                # add s to t
                 legals = list(board.generate_legal_moves())
                 tree.Ls[s]=legals
-                tree.Qsa[s]=np.zeros(len(legals), dtype=np.float32)
+                tree.Sum[s]=np.zeros(len(legals), dtype=np.float32)
                 tree.Nsa[s]=np.zeros(len(legals), dtype=np.uint32)
                 return self.trans_table[s][1]
 
-        mew = (tree.Nsa[s] > 0).where(tree.Sum[s] / tree.Nsa[s], self.fpu)
+        mew = np.where(tree.Nsa[s] > 0, tree.Sum[s] / tree.Nsa[s], self.fpu)
         bandit = mew + self.c_puct * self.trans_table[s][0] * math.sqrt(tree.Nsa[s].sum()) / (1. + tree.Nsa[s])
         puct = bandit.argmax(-1)
         board.push(tree.Ls[s][puct])
 
-        next_fen = board.fen()
-        v = self._puct(next_fen, getBatch)
-        tree.update(fen, puct, v, getBatch)
-        return -v if v else None
+        v = self._puct(board, getBatch)
+        tree.update(s, puct, v, getBatch)
+        return -v if v is not None else None
 
     def _get_batch(self, fen:str, B:int):
-        self.batch, self.batch_tree = [], copy.deepcopy(self.tree)
-        while len(self.batch) < B: self._puct(fen, True)
+        self.batch_boards, self.batch_globals, self.batch_fens, self.batch_tree = [], [], [], copy.deepcopy(self.tree)
+        while len(self.batch_fens) < B: self._puct(chess.Board(fen), True)
 
     def _put_batch(self, fen:str, out:tuple[Tensor,Tensor]):
-        board = chess.Board(fen)
-        ps, vs = out[0], out[1]
-        for pl, vl in zip(ps.split(1,dim=0), vs.split(1,dim=0)):
+        pl, vl = out[0], out[1]
+        probs, values = pl.softmax(axis=-1).numpy(), (vl.softmax(axis=-1) @ Tensor([1.,0.,-1.])).numpy()
+        for i, lfen in enumerate(self.batch_fens):
+            board = chess.Board(lfen)
             flip = not board.turn
             legals = list(board.generate_legal_moves())
             indices = [move_to_idx(lm, flip) for lm in legals]
-            policy = pl.flatten()[indices].softmax().numpy()
-            value = -vl.softmax().dot(Tensor([1.0, 0.0, -1.0])).item()
-            self.trans_table[board._transposition_key()]=(policy,value)
-            return -vl.softmax().dot(Tensor([1.0, 0.0, -1.0])).item()
+            self.trans_table[board._transposition_key()]=(probs[i][indices],-values[i])
+        i = 0
+        while (v := self._puct(chess.Board(fen), False)) is not None:
+            v = self._puct(chess.Board(fen), False)
+            i += 1
 
-    def __call__(self, fen:str, num_batches:int, batch_size:int) -> chess.Move:
+    def search_iter(self, fen:str, num_batches:int=32, batch_size:int=32):
         self.tree = Tree()
-        for _ in range(num_batches):
+        s = chess.Board(fen)._transposition_key()
+        for n in range(num_batches):
             self._get_batch(fen, batch_size)
-            x, xg = Tensor.stack(*[b[0] for b in self.batch]), Tensor.stack(*[b[1] for b in self.batch])
+            x = Tensor(np.stack(self.batch_boards), dtype=dtypes.uint16)
+            xg = Tensor(np.stack(self.batch_globals), dtype=dtypes.float32)
             out = self.model(x, xg)
             self._put_batch(fen, out)
+            yield n, self.tree.Ls[s], self.tree.Nsa[s]
+
+    def __call__(self, fen:str, num_batches:int=32, batch_size:int=32, second_move_heuristic:bool=True) -> tuple[chess.Move, np.ndarray]:
         s = chess.Board(fen)._transposition_key()
+        for n, _, nsa in self.search_iter(fen, num_batches, batch_size):
+            print(n, nsa)
         best = self.tree.Nsa[s].argmax(-1)
-        return self.tree.Ls[s][best]
+        return self.tree.Ls[s][best], self.tree.Nsa[s]
