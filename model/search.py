@@ -1,7 +1,7 @@
 from tinygrad.tensor import Tensor
-import numpy as np
-import math
-from util.convert import board_to_tensor, get_global_features, build_move_mapping
+from tinygrad.dtype import dtypes
+import numpy as np, math
+from util.convert import board_to_tensor, get_global_features, build_move_mapping, move_to_idx
 from model import Model
 import chess
 
@@ -21,12 +21,14 @@ class MCTS:
         self.c_puct = c_puct
         self.Qsa, self.Nsa, self.Ps, self.Ls, self.Es = {}, {}, {}, {}, {}
 
-    def __call__(self, fen:str, num_sims:int=5):
+    def __call__(self, fen:str, num_sims:int=100):
         self.Qsa, self.Nsa, self.Ps, self.Ls, self.Es = {}, {}, {}, {}, {}
-        for _ in range(num_sims): self.sim(fen)
+        for n in range(num_sims):
+            print(f"Simulation {n}")
+            self.sim(fen)
         s = chess.Board(fen)._transposition_key()
         a = self.Nsa[s].argmax(-1)
-        return chess.Move(*inv_move_map[self.Ls[s][a]])
+        return self.Ls[s][a]
 
     # https://suragnair.github.io/posts/alphazero.html
     def sim(self, fen:str):
@@ -45,19 +47,23 @@ class MCTS:
             return -z
 
         if s not in self.Ps:
+            flip = not board.turn
             pl, vl = self.model(
-                Tensor(board_to_tensor(board, not board.turn)),
-                Tensor(get_global_features(board, board.turn))
+                Tensor(board_to_tensor(board, flip), dtype=dtypes.uint16),
+                Tensor(get_global_features(board, board.turn), dtype=dtypes.float32).unsqueeze(0)
             )
-            indices = [move_map[(lm.from_square, lm.to_square, lm.promotion)] for lm in board.generate_legal_moves()]
-            self.Ls[s]=indices
-            self.Ps[s]=pl.flatten()[indices].softmax().numpy()
-            self.Qsa[s]=np.zeros(len(indices), dtype=np.float32)
-            self.Nsa[s]=np.zeros(len(indices), dtype=np.uint32)
-            return -vl.dot([1.0, 0.0, -1.0]).item()
+            # need to handle promotions
+            legals = list(board.generate_legal_moves())
+            # indices = [move_map[(lm.from_square, lm.to_square, 0 if (not lm.promotion or lm.promotion == chess.QUEEN) else lm.promotion - 1)] for lm in board.generate_legal_moves()]
+            self.Ls[s]=legals
+            indices = [move_to_idx(lm, flip) for lm in legals]
+            self.Ps[s]=pl.flatten()[indices].softmax().numpy() # logits -> probs
+            self.Qsa[s]=np.zeros(len(legals), dtype=np.float32)
+            self.Nsa[s]=np.zeros(len(legals), dtype=np.uint32)
+            return -vl.softmax().dot(Tensor([1.0, 0.0, -1.0])).item()
 
         best = (self.Qsa[s] + self.c_puct * self.Ps[s] * math.sqrt(max(self.Nsa[s].sum(), 1)) / (1. + self.Nsa[s])).argmax(-1)
-        board.push(chess.Move(*inv_move_map[self.Ls[s][best]]))
+        board.push(self.Ls[s][best])
 
         next_fen = board.fen()
         v = self.sim(next_fen)
